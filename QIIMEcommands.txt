@@ -1,0 +1,85 @@
+# move fastq files to server
+scp /Users/clairewilliams/Dropbox/PhD/Gunderson_Microbiome/WangV6V8.zip \
+clairewilliams@pronghorn.rc.unr.edu:/data/gpfs/assoc/lizard_project/anolis_gunderson_mb
+
+# SSH
+ssh clairewilliams@pronghorn.rc.unr.edu 
+
+# unzip folder 
+unzip WangV6B8.zip
+
+# generate config, snakefiles, and slurm scripts
+# edited and saved as: 
+
+snakefile_import_summarize_gunderson
+Slurm_import_summarize.sh 
+config_gunderson.yaml
+Slurm_runDada2_gunderson.sh
+Snakfile-16S-18S-TA_gunderson
+
+#run
+ sbatch --mail-user=williams.claire.e@gmail.com Slurm_import_summarize.sh config_gunderson.yaml
+
+# pull down for quality assessment
+scp clairewilliams@pronghorn.rc.unr.edu:/data/gpfs/assoc/lizard_project/anolis_gunderson_mb/SMWorkingDirectory/qiime2/Anolis_Gunderson-quality-summary.qzv \
+/Users/clairewilliams/Dropbox/PhD/Gunderson_Microbiome
+
+sbatch --mail-user=williams.claire.e@gmail.com Slurm_runDada2_gunderson.sh config_gunderson.yaml
+
+
+qiime phylogeny midpoint-root \
+ --i-tree Anolis_Gunderson-unrooted-tree.qza \
+ --o-rooted-tree Anolis_Gunderson-rooted-tree.qza
+ 
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny  Anolis_Gunderson-rooted-tree.qza \
+  --i-table Anolis_Gunderson-nomito-nochloro-asv-table.qza \
+  --p-sampling-depth 5000 \
+  --m-metadata-file metadata_gunderson.tsv \
+  --output-dir core-metrics-results-5000depth
+  
+  
+# run stats on each of these:
+
+qiime diversity alpha-group-significance \
+--i-alpha-diversity faith_pd_vector.qza \
+--m-metadata-file ../metadata_gunderson.tsv \
+--o-visualization faith_pd_group-significance.qzv
+&&
+qiime diversity alpha-group-significance \
+--i-alpha-diversity evenness_vector.qza \
+--m-metadata-file ../metadata_gunderson.tsv  \
+--o-visualization evenness_group-significance.qzv
+&&
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity observed_features_vector.qza \
+--m-metadata-file ../metadata_gunderson.tsv  \
+ --o-visualization observed_features_significance.qzv
+&&
+qiime diversity alpha-group-significance \
+--i-alpha-diversity shannon_vector.qza \
+--m-metadata-file ../metadata_gunderson.tsv  \
+--o-visualization shannon_group-significance.qzv
+
+
+qiime diversity beta-group-significance \
+--i-distance-matrix weighted_unifrac_distance_matrix.qza \
+--m-metadata-file ../../metadata_gunderson.tsv \
+--m-metadata-column treatment \
+--o-visualization aca_weighted_unifrac_treatment_significance.qzv \
+--p-pairwise 
+&&
+qiime diversity beta-group-significance \
+--i-distance-matrix unweighted_unifrac_distance_matrix.qza \
+--m-metadata-file ../../metadata_gunderson.tsv \
+--m-metadata-column treatment \
+--o-visualization aca_unweighted_unifrac_treatment_significance.qzv \
+--p-pairwise 
+&&
+qiime diversity beta-group-significance \
+--i-distance-matrix jaccard_distance_matrix.qza \
+--m-metadata-file ../../metadata_gunderson.tsv \
+--m-metadata-column treatment \
+--o-visualization aca_jaccard_treatment_significance.qzv \
+--p-pairwise 
+

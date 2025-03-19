@@ -1,0 +1,701 @@
+---
+title: "R Notebook"
+author: "Claire E Williams"
+date: "3/19/2025"
+output: 
+  html_document:
+    toc: yes
+    toc_float:
+      collapsed: true
+---
+General data processing overview: 
+ 1. Generated sequences and metadata 
+ 2. Processed sequences into ASVs via QIIME2 (separate script), built trees, annotated taxa
+ 3. Removed non-bacterial reads
+ 4. Calculated diversity metrics (rarefied to 5,000 reads)
+ 5. Conducted the following statistical analyses in R
+
+ 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE, results='hide') 
+
+```
+
+```{r Libraries}
+library(qiime2R)
+library(ggthemes)
+library(vegan)
+library(tidyverse)
+library(nlme)
+library(emmeans)
+library(Maaslin2)
+library(phyloseq)
+library(ggh4x)
+```
+
+
+```{r color palette}
+c25 <- c( "maroon", "orchid1", "deeppink1", "blue1", "steelblue4",
+  "#6A3D9A", # purple
+  "#FF7F00", # orange
+  "black", "gold1",
+  "skyblue2", "#FB9A99", # lt pink
+  "palegreen2",
+  "#CAB2D6", # lt purple
+  "#FDBF6F", # lt orange
+  "gray70", "khaki2",
+  "darkturquoise", "green1", "yellow4", "yellow3",
+  "darkorange4", "brown", 
+  "dodgerblue2", "#E31A1C", # red
+  "green4"
+)
+
+cSmall<-c("#B1AB4A","#A9667C","#253028","#938E8B","#47601C")
+
+cSpecies<-c("#CB61A6","#EDC15A", "#CA5D2B") # carol, crist, sag (based on dewlaps)
+plot_theme <- theme_few()
+
+
+cTreatment<-c("#A3B5E6","#DF9696")
+```
+
+```{r All Anoles Together, Week 1}
+# read in metadata
+metadata<-read_q2metadata("metadata_gunderson.tsv")
+
+# read in different diversity metrics files
+jaccard<- read_qza("core-metrics-results-5000depth/jaccard_pcoa_results.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+
+w_unif<-read_qza("core-metrics-results-5000depth/weighted_unifrac_pcoa_results.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+
+uw_unif<-read_qza("core-metrics-results-5000depth/unweighted_unifrac_pcoa_results.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+
+shannon<-read_qza("core-metrics-results-5000depth/shannon_vector.qza")$data %>%
+  rownames_to_column("SampleID") %>%
+  left_join(metadata, ., by = "SampleID")
+
+observedOTUs<-read_qza("core-metrics-results-5000depth/observed_features_vector.qza")$data %>%
+  rownames_to_column("SampleID") %>%
+  left_join(metadata, ., by = "SampleID")
+
+
+# read in different diversity metrics files filtered by week 1
+
+jaccard_wk1 <- read_qza("core-metrics-results-5000depth/wk1/jaccard_pcoa.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+
+weighted_unifrac_wk1<-read_qza("core-metrics-results-5000depth/wk1/weighted_unifrac_pcoa.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+
+uw_unif_wk1<-read_qza("core-metrics-results-5000depth/wk1/unweighted_unifrac_pcoa.qza")$data$Vectors %>%
+  left_join(metadata, ., by = "SampleID")
+```
+
+## Result 1: Species Level Microbiome Composition Differences (isolated in week 1)
+
+```{r Publication - Figure Species Differences, include = F}
+
+jaccard_wk1 %>%
+  ggplot(aes(x = PC1, y = PC2)) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  theme_few() + 
+  scale_y_continuous(limits = c(-0.4, 0.4), breaks = c(-0.4, -0.2, 0.0, 0.2, 0.4)) +  
+  scale_x_continuous(limits = c(-0.4, 0.4), breaks = c(-0.4, -0.2, 0.0, 0.2, 0.4))+
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15), 
+        legend.title = element_text(size =16)) +  
+  stat_ellipse(aes(color = species),show.legend = F)+
+  scale_color_manual(values = cSpecies) + 
+  scale_fill_manual(values = cSpecies) +
+    labs(fill="Species") 
+
+
+ggsave("jaccard_species_similarity_ord.pdf",width = 6.5, height = 5, units = c("in"))
+
+
+  
+weighted_unifrac_wk1 %>%
+  ggplot(aes(x = PC1, y = PC2, color = species)) + 
+  geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  theme_few() + 
+  scale_y_continuous(limits = c(-0.6, 0.6), breaks = c(-0.6, -0.3, 0.0, 0.3, 0.6))+
+  scale_x_continuous(limits = c(-0.9, 0.9), breaks = c(-0.9, -0.45, 0.0, 0.45, 0.9))+
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15), 
+        legend.title = element_text(size =16)) + 
+  stat_ellipse(aes(color = species),show.legend = F)+
+  scale_color_manual(values = cSpecies) + 
+  scale_fill_manual(values = cSpecies) + 
+  labs(fill="Species") 
+
+
+ggsave("wunif_species_similarity_ord.pdf",width = 6.5, height = 5, units = c("in"))
+
+```
+
+
+## Result 2: Individuals are similar to themselves throughout the experiment.
+
+
+```{r Publication - Figure distance self, include = F}
+
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+
+dist.other.vs.self %>%
+  filter(samespecies == T) %>%
+  mutate(mean_type = ifelse(mean_type == "mean_other", "Between individuals", "Within individual")) %>%
+  mutate(mean_type = fct_relevel(mean_type, c("Within individual", "Between individuals") )) %>%
+  ggplot(aes(x = mean_type, y = mean, fill = species_1)) +
+  geom_boxplot(alpha = 0.5) +
+  theme_few()+
+  ylab("Mean Jaccard distance") + 
+  facet_wrap2(~species_1, strip = strip) + 
+  scale_fill_manual(values = cSpecies) + 
+  theme(axis.title.x = element_blank(), legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic"))
+  
+ggsave("Jaccard_withandbetweenindividuals.pdf",width = 10, height = 5, units = c("in"))
+
+```
+
+
+
+## Result 3: CTmax shifts by treatment
+
+``` {r Publication - Figure CTmax differences, include = F }
+
+
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+
+metadata %>%
+  filter(Week == 1 ) %>%
+  distinct(liz_num, .keep_all = T) %>%
+  filter(treatment %in% c("Cool", "Warm")) %>%
+  ggplot(aes(y = ctmax1, x = treatment, fill = species)) + 
+  geom_boxplot(aes(alpha = treatment)) +
+  scale_fill_manual(values = cSpecies) + 
+  facet_wrap2(~species, strip = strip) +
+  theme_few() + 
+  scale_alpha_manual(values = c(0.3, 1))+  
+  scale_y_continuous(limits = c(36, 44), breaks = c(36, 38, 40, 42, 44)) +  
+  ylab(bquote(CT[max])) + 
+  theme(axis.title.x = element_blank(), legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic"))
+
+
+ggsave("CTmax_treatments.pdf",width = 10, height = 5, units = c("in"))
+
+
+
+
+
+metadata %>%
+  filter(liz_num != 4) %>%
+  filter(Week == 3) %>%
+    filter(treatment %in% c("Cool", "Warm")) %>%
+  distinct(liz_num, .keep_all = T) %>%
+  mutate(change_ctmax = ctmax2-ctmax1) %>%
+  ggplot(aes(x = treatment, y = change_ctmax, fill = species)) + 
+    geom_boxplot(aes(alpha = treatment)) +
+  scale_fill_manual(values = cSpecies) + 
+  facet_wrap2(~species, strip = strip) +
+  theme_few() + 
+  ylab(bquote(CT[max])) + 
+  scale_alpha_manual(values = c(0.3, 1)) + 
+  theme(axis.title.x = element_blank(), legend.position = "none") + 
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic")) + 
+  ylim(-4.5,4.5)
+
+
+ggsave("HeatHardening_treatments.pdf",width = 10, height = 5, units = c("in"))
+
+
+
+```
+
+## Result 4: Treatment does not have a predictable effect on the gut microbiome 
+
+```{r Publication - Figure change Jaccard, include = F}
+
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+library(ggtext)
+
+
+md.diff_pairwise_distances %>%
+  ggplot(aes(y = as.numeric(Distance),  x = treatment, fill = species)) + 
+  geom_boxplot(aes(alpha = treatment, fill = species)) +
+ scale_fill_manual(values = cSpecies) + 
+  facet_wrap2(~species, strip = strip) +
+  theme_few() + 
+  scale_alpha_manual(values = c(0.3, 1))+  
+  theme(axis.title.x = element_blank(), legend.position = "none") + 
+  scale_y_continuous(limits = c(0.4, 0.9), breaks = c(0.4, 0.5, 0.6, 0.7, 0.8, 0.9)) +  
+  labs( y = "&Delta; Jaccard",) + 
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic")) + 
+  theme(axis.title.y= element_markdown()  )
+
+
+
+ggsave("Change_Jaccards.pdf",width = 10, height = 5, units = c("in"))
+
+```
+
+
+```{r Publication - Figure end Jaccard, include = F}
+jaccard_final %>%
+  filter(treatment %in% c("Cool", "Warm")) %>%
+  mutate(treatment_species = paste(treatment, species, sep = "_")) %>%
+  ggplot(aes(x = PC1, y = PC2)) + 
+  geom_point(size = 3.5, aes(fill = species, alpha = treatment, shape = treatment), color = "black") +
+  scale_fill_manual(values = cSpecies) +
+  scale_color_manual(values = cSpecies) +
+  scale_shape_manual(values = c(21, 24))+
+  theme_few() + 
+  scale_y_continuous(limits = c(-0.4, 0.4), breaks = c(-0.4, -0.2, 0.0, 0.2, 0.4)) +  
+  scale_x_continuous(limits = c(-0.4, 0.4), breaks = c(-0.4, -0.2, 0.0, 0.2, 0.4))+
+  stat_ellipse(aes(group = treatment_species, color = species, alpha = treatment ), show.legend = F) +
+  scale_alpha_manual(values = c(0.5, 1)) +
+  theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15), 
+        legend.title = element_text(size =16)) + 
+  labs(shape="Treatment", color = "Species")
+
+ggsave("jaccard_endtreatment_ord.pdf",width = 6.5, height = 5, units = c("in"))
+
+```
+ 
+## Result 5: Thermal tolerance _is_ correlated with gut microbiome diversity, but it seems that the lizards starting GM composition is a better predictor of their CTmax than their GM in week 3
+
+```{r Publication - Figure Jaccard vs. ctmax wk1, include = F}
+
+
+library(ggh4x)
+
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+
+metadata.jaccard<-left_join(metadata, jaccard) %>%
+  arrange() %>%
+  filter(!(SampleID %in% c("Sample95", "Sample154", "Sample162"))) %>%
+  filter(!(liz_num %in% c("37", "38", "4", "65", "72")))
+
+metadata.jaccard %>%
+  filter(Week == "1") %>%
+  ggplot(aes(x = ctmax1, y = PC1)) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  facet_wrap(~species) + 
+  geom_smooth(method = "lm", aes(color = species, fill = species)) + 
+  ylab("Jaccard PC1 (Week one)") + 
+  xlab(bquote(CT[max])) +
+  theme_few() + 
+  facet_wrap2(~species, strip = strip, scales = "free") + 
+  scale_fill_manual(values = cSpecies) + 
+  scale_color_manual(values = cSpecies) + 
+  theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic"))
+
+
+write.csv(data_for_mike, "jaccard_ctmax1_threeanoles.csv")
+  
+ggsave("Jaccard_CTmax_Weekone.pdf",width = 10, height = 5, units = c("in"))
+
+
+
+```
+
+```{r Publication - Figure Jaccard vs. ctmax wk3, include = F}
+
+
+library(ggh4x)
+
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+
+metadata.jaccard<-left_join(metadata, jaccard) %>%
+  arrange() %>%
+  filter(!(SampleID %in% c("Sample95", "Sample154", "Sample162"))) %>%
+  filter(!(liz_num %in% c("37", "38", "4", "65", "72")))
+
+metadata.jaccard %>%
+  filter(Week == "3") %>%
+  ggplot(aes(x = ctmax1, y = PC1)) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+    facet_wrap(~species) + 
+  geom_smooth(method = "lm", aes(color = species, fill = species)) + 
+  ylab("Jaccard PC1 (Week three)") + 
+  xlab(bquote(CT[max])) +
+  theme_few() + 
+  facet_wrap2(~species, strip = strip, scales = "free") + 
+  scale_fill_manual(values = cSpecies) + 
+  scale_color_manual(values = cSpecies) + 
+  theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic"))
+
+
+ggsave("Jaccard_CTmax_WeekThree.pdf",width = 10, height = 5, units = c("in"))
+
+
+
+```
+
+
+
+## Result 6: Degree of change across weeks in the gut microbiome seems to be correlated with degree of heat hardening.
+
+```{r Publication - Figure change microbiome and heat hardening, include = F}
+library(ggh4x)
+library(ggtext)
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+
+md.diff_pairwise_distances %>%
+  ggplot(aes(y = as.numeric(Disstance),  x = abs(diff_CTMax), color = species, fill = species)) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  geom_smooth(method=lm) + 
+  theme_few() +
+  facet_wrap2(~species, strip = strip) + 
+  scale_fill_manual(values = cSpecies) + 
+  scale_color_manual(values = cSpecies) + 
+  theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic")) + 
+  labs( y = "&Delta; Jaccard", x = "&Delta; CTmax (Absolute Value)") + 
+    theme(axis.title.y= element_markdown(), axis.title.x = element_markdown()  )
+    
+
+write.csv(data_for_mike2, "ctmaxchange_jaccarddistance.csv")
+ggsave("ChangeJaccard_ChangeHeatTolerance.pdf",width = 10, height = 5, units = c("in"))
+
+```
+## Result 7: Correlations between specific taxa and CTmax. 
+```{r Week 1 quadratic models}
+data.phy<-qza_to_phyloseq("core-metrics-results-5000depth/rarefied_table.qza", metadata = "metadata_gunderson_ctmax_generalcategorical_forplot.tsv", taxonomy = "Anolis_Gunderson-taxonomy.qza", tree = "Anolis_Gunderson-rooted-tree.qza") %>%
+  subset_samples(Week == 1) %>%
+  tax_glom(taxrank = "Phylum")
+  
+data.phy.df.tp1<- transform_sample_counts(data.phy, function(x) x/sum(x)) %>% 
+  psmelt()
+
+# taxa of interest: 
+top.phyla<-c("Bacteroidota", "Firmicutes", "Proteobacteria", "Verrucomicrobiota", "Fusobacteriota", "Desulfobacterota")
+
+data.phy.df.tp1 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() +
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() +
+  ggtitle("Sagrei - Phyla vs CTmax, Week 1")
+  
+sag_data_topphy<- data.phy.df.tp1 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla)
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(sag_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+
+data.phy.df.tp1 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() + 
+  ggtitle("Carol - Phyla vs CTmax, Week 1")
+
+carol_data_topphy<- data.phy.df.tp1 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla)
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(carol_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+
+data.phy.df.tp1 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() + 
+  ggtitle("Crist - Phyla vs CTmax,  Week 1")
+
+crist_data_topphy<- data.phy.df.tp1 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla)
+
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(crist_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+```
+
+```{r Publication - Figure Taxa vs ctmax Week One, include = F}
+top.phyla<-c("Bacteroidota", "Firmicutes", "Proteobacteria", "Fusobacteriota")
+
+
+data.phy.df.tp1 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+      xlab(bquote(CT[max])) +
+  ylab("Phylum Relative Abundance") +
+   geom_point(size = 3.5, fill = cSpecies[3], color = "black", shape = 21) + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[3], color = cSpecies[3]) +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+
+ggsave("sag_ctmax_taxa.pdf",width = 3, height = 8, units = c("in"))
+
+
+data.phy.df.tp1 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+    xlab(bquote(CT[max])) +
+  ylab("Phylum Relative Abundance") +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+   geom_point(size = 3.5, fill = cSpecies[1], color = "black", shape = 21) + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[1], color = cSpecies[1]) +
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+ggsave("carol_ctmax_taxa.pdf",width = 3, height = 8, units = c("in"))
+
+
+data.phy.df.tp1 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+   geom_point(size = 3.5, fill = cSpecies[2], color = "black", shape = 21) + 
+  xlab(bquote(CT[max])) +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+  ylab("Phylum Relative Abundance") +
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[2], color = cSpecies[2]) +
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+
+ggsave("crist_ctmax_taxa.pdf",width = 3, height = 8, units = c("in"))
+
+
+
+```
+
+
+```{r Week 3 Quadratic Models}
+data.phy<-qza_to_phyloseq("core-metrics-results-5000depth/rarefied_table.qza", metadata = "metadata_gunderson_ctmax_generalcategorical_forplot.tsv", taxonomy = "Anolis_Gunderson-taxonomy.qza", tree = "Anolis_Gunderson-rooted-tree.qza") %>%
+  subset_samples(Week == 3) %>%
+  tax_glom(taxrank = "Phylum")
+  
+data.phy.df.tp3<- transform_sample_counts(data.phy, function(x) x/sum(x)) %>% 
+  psmelt()
+
+# taxa of interest: 
+top.phyla<-c("Bacteroidota", "Firmicutes", "Proteobacteria", "Verrucomicrobiota", "Fusobacteriota", "Desulfobacterota")
+
+data.phy.df.tp3 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() +
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() +
+  ggtitle("Sagrei - Phyla vs CTmax, Week 3")
+  
+sag_data_topphy<- data.phy.df.tp3 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla)
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(sag_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+
+data.phy.df.tp3 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() + 
+  ggtitle("Carol - Phyla vs CTmax, Week 3")
+
+carol_data_topphy<- data.phy.df.tp3 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla)
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(carol_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+
+data.phy.df.tp3 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+  geom_point() + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1) +
+  facet_wrap(~Phylum, scales = "free") + 
+  theme_few() + 
+  ggtitle("Crist - Phyla vs CTmax, Week 3")
+
+crist_data_topphy<- data.phy.df.tp3 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla)
+
+
+for (i in 1:length(top.phyla)) {
+  model<-filter(crist_data_topphy, Phylum == top.phyla[i]) %>%
+  lm(data = ., formula = Abundance~ ctmax1 + I(ctmax1^2))
+  print(summary(model))
+}
+
+```
+
+```{r Publication - Figure Taxa vs ctmax Week three, include = F}
+top.phyla<-c("Bacteroidota", "Firmicutes", "Proteobacteria", "Fusobacteriota")
+
+
+data.phy.df.tp3 %>%
+  filter(species == "A. sag") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+      xlab(bquote(CT[max])) +
+  ylab("Phylum Relative Abundance") +
+   geom_point(size = 3.5, fill = cSpecies[3], color = "black", shape = 21) + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[3], color = cSpecies[3]) +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+
+ggsave("sag_ctmax_taxa_week3.pdf",width = 3, height = 8, units = c("in"))
+
+
+data.phy.df.tp3 %>%
+  filter(species == "A. carol") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+    xlab(bquote(CT[max])) +
+  ylab("Phylum Relative Abundance") +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+   geom_point(size = 3.5, fill = cSpecies[1], color = "black", shape = 21) + 
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[1], color = cSpecies[1]) +
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+ggsave("carol_ctmax_taxa_week3.pdf",width = 3, height = 8, units = c("in"))
+
+
+data.phy.df.tp3 %>%
+  filter(species == "A. crist") %>%
+  filter(Phylum %in% top.phyla) %>%
+  ggplot(aes(x = ctmax1, y = Abundance)) + 
+   geom_point(size = 3.5, fill = cSpecies[2], color = "black", shape = 21) + 
+  xlab(bquote(CT[max])) +
+    scale_x_continuous(limits = c(36, 46), breaks = c(36, 38, 40, 42, 44, 46))+
+  ylab("Phylum Relative Abundance") +
+  stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1, fill = cSpecies[2], color = cSpecies[2]) +
+  facet_wrap(~Phylum, scales = "free", nrow = 6) + 
+  theme_few()+
+      theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16))
+
+
+ggsave("crist_ctmax_taxa_week3.pdf",width = 3, height = 8, units = c("in"))
+
+
+
+```
+
+## Result 8: Correlations between microbiome composition in week 1 / 3 and CTmax plasticity
+
+```{r Publication - Figure Jaccard/Obs features vs. CTmax change }
+library(ggh4x)
+library(ggtext)
+strip <- strip_themed(background_x = elem_list_rect(fill = cSpecies))
+
+metadata.diffctmax.jaccard %>%
+  filter(Week == 3) %>%
+  ggplot(aes(x = diff_CTMax, y = PC1, color = species, fill = species )) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  geom_smooth(method=lm) + 
+  facet_wrap2(~species, strip = strip, scales = 'free') + 
+  theme_few() +
+ scale_fill_manual(values = cSpecies) + 
+  scale_color_manual(values = cSpecies) + 
+   theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic")) + 
+  labs( y = "Jaccard PC1", x = "&Delta; CTmax")
+
+ggsave("Jaccard_ChangeHeatTolerance.pdf",width = 10, height = 5, units = c("in"))
+
+
+metadata.diffctmax.obsotus %>%
+  filter(Week == 3) %>%
+  ggplot(aes(x = diff_CTMax, y = observed_features, color = species, fill = species )) + 
+   geom_point(size = 3.5, aes(fill = species), color = "black", shape = 21) + 
+  geom_smooth(method=lm) + 
+  facet_wrap2(~species, strip = strip, scales = 'free') + 
+  theme_few() +
+ scale_fill_manual(values = cSpecies) + 
+  scale_color_manual(values = cSpecies) + 
+   theme(legend.position = "none") + 
+   theme(axis.text = element_text(size = 12), axis.title = element_text(size = 15), legend.text = element_text(size = 15,), 
+        legend.title = element_text(size =16), strip.text.x = element_text(size = 16, face= "italic")) + 
+  labs( y = "Observed OTUs", x = "&Delta; CTmax")
+
+ggsave("OTUs_ChangeHeatTolerance.pdf",width = 10, height = 5, units = c("in"))
+
+
+```
+
